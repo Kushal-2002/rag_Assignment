@@ -1,157 +1,132 @@
 \documentclass[11pt,a4paper]{article}
 
-\usepackage[margin=2.2cm]{geometry}
+\usepackage[margin=2.5cm]{geometry}
 \usepackage{booktabs}
 \usepackage{tabularx}
 \usepackage{amsmath}
-\usepackage{xcolor}
-\usepackage{enumitem}
 \usepackage[hidelinks]{hyperref}
 
-\setlist{itemsep=2pt, topsep=4pt}
 \newcolumntype{Y}{>{\raggedright\arraybackslash}X}
 
-\title{\textbf{RAG Assignment: Baseline vs.\ Re-Ranking}\\[4pt]
-\large Bi-Encoder Retrieval vs.\ Cross-Encoder Re-Ranking on the FIDE Laws of Chess}
-\author{Kushal Mukherjee \\ \small Roll No.: 2025201072}
+\title{RAG Assignment: Baseline vs. Re-Ranking}
+\author{Kushal Mukherjee (2025201072)}
 \date{19 October 2026}
 
 \begin{document}
 \maketitle
 
-\noindent\textbf{Code:} \url{https://github.com/Kushal-2002/rag_Assignment} \quad (single notebook: \texttt{rag\_reranking.ipynb})
+\noindent GitHub: \url{https://github.com/Kushal-2002/rag_Assignment}
 
 \section{Setup}
+
+I used the FIDE Laws of Chess PDF (25 pages) as the document. It has 14 Articles followed by appendices for Rapidplay, Blitz, notation, blind players and Chess960. The rules are numbered clause by clause (3.8, 9.2, A.4 and so on), so I made one chunk per clause and cut any clause longer than 150 words into smaller pieces. This gave 132 chunks.
 
 \begin{center}
 \begin{tabular}{@{}ll@{}}
 \toprule
-\textbf{Component} & \textbf{Choice} \\
+Component & What I used \\
 \midrule
-Document        & FIDE Laws of Chess (25 pages: Articles 1--14, Appendices A--F, Guidelines) \\
-Chunking        & One chunk per numbered clause (3.8, 9.2, A.4, \dots), max.\ 150 words $\rightarrow$ 132 chunks \\
-Bi-Encoder      & \texttt{sentence-transformers/all-MiniLM-L6-v2} (384-dim) \\
-Vector store    & FAISS \texttt{IndexFlatIP} on normalised vectors (= cosine similarity) \\
-Cross-Encoder   & \texttt{cross-encoder/ms-marco-MiniLM-L-6-v2} \\
-LLM             & \texttt{llama3} (8B) via local Ollama, temperature 0 \\
+Bi-encoder     & all-MiniLM-L6-v2 (384-dim embeddings) \\
+Vector store   & FAISS IndexFlatIP with normalised vectors (so inner product = cosine) \\
+Cross-encoder  & cross-encoder/ms-marco-MiniLM-L-6-v2 \\
+LLM            & llama3 (8B) on Ollama, temperature 0 \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-\noindent Both pipelines use the same prompt, which tells the LLM to answer \emph{only} from the three given chunks and otherwise reply ``Not found in the context.'' This stops the model from answering from memory and hiding a retrieval failure. Without any context, llama3 already stated a rule wrongly (it said the king moves \emph{three} squares when castling; the correct number is two).
+Both pipelines use the same prompt. It asks the LLM to answer only from the three chunks it is given, and to say ``Not found in the context'' if the answer is not there. I did this because otherwise llama3 could answer from its own memory and I would not be able to see when retrieval failed. Its memory is not reliable anyway: when I asked it about castling with no context, it said the king moves three squares, which is wrong (it is two).
 
-\section{Architecture Comparison}
+\section{Bi-Encoder vs. Cross-Encoder}
 
-\textbf{Bi-Encoder.} The query and each chunk are encoded \emph{independently} by the same transformer, and each is mean-pooled into a single vector. Relevance is the cosine similarity of the two vectors:
-\[
-  s_{\text{bi}}(q,d) = \cos\big(E(q),\,E(d)\big).
-\]
-Because the chunk vectors do not depend on the query, they can be computed once, offline, and stored in a vector index. A query then needs only one encoding plus a fast nearest-neighbour search. The drawback is that the query and chunk tokens never interact: the whole chunk is compressed into one 384-dimensional vector \emph{before} the model has seen the question. A small detail such as ``in rapidplay'', ``for a blind player'' or ``not'' therefore has little effect on the score.
+A bi-encoder encodes the query and the chunk separately. Each one becomes a single vector, and the score is just the cosine similarity between the two vectors, $s(q,d) = \cos(E(q), E(d))$. Since the chunk vectors do not depend on the query, I could compute them once and store them in FAISS. At query time only the query has to be encoded. The problem is that the query and chunk words never see each other. The whole chunk is squeezed into one vector before the model knows what the question is, so small but important words like ``not'', ``in rapidplay'' or ``for a blind player'' do not change the score much.
 
-\textbf{Cross-Encoder.} The query and chunk are concatenated into one input, \texttt{[CLS] query [SEP] chunk [SEP]}, and passed through the transformer together. Self-attention runs \emph{jointly} across all tokens, so every query word can attend to every chunk word. A classification head outputs one relevance score:
-\[
-  s_{\text{ce}}(q,d) = f\big([\,q\,;\,d\,]\big).
-\]
-This is much more precise, but nothing can be pre-computed: every (query, chunk) pair needs its own full forward pass at query time.
+A cross-encoder takes the query and the chunk together as one input (\texttt{[CLS] query [SEP] chunk [SEP]}). Self-attention runs over all the tokens at once, so every word in the query can attend to every word in the chunk, and the model outputs one relevance score. This is more accurate, but nothing can be stored in advance. Every (query, chunk) pair needs its own forward pass when the query comes in.
 
-\section{Qualitative \& Rank Shift Analysis}
+\section{Rank Shifts and Answer Comparison}
 
-\subsection{Method}
-About 160 candidate queries were written across the four failure types. Each query was labelled \emph{manually} with the chunk(s) that actually answer it, found by reading the document. For every query, the rank of the correct chunk was recorded before and after re-ranking. A query counts as a failure case when the correct chunk is \textbf{outside the baseline Top~3} but \textbf{inside the Top~3 after re-ranking}. Of the 30 representative queries kept in the notebook, \textbf{10 meet this criterion}.
-
-\subsection{Rank shifts}
+To find failure cases, I wrote around 160 test questions. For each one I read the document and noted down which chunk actually contains the answer. Then I checked where that chunk ended up in the bi-encoder ranking and in the cross-encoder ranking. I counted a query as a failure case if the correct chunk was outside the baseline top 3 but inside the top 3 after re-ranking. I kept 30 of these questions in the notebook, and 10 of them meet this condition:
 
 \begin{center}
 \small
 \begin{tabularx}{\textwidth}{@{}l Y c c@{}}
 \toprule
-\textbf{Type} & \textbf{Query} & \textbf{Chunk} & \textbf{Bi $\rightarrow$ CE rank} \\
+Type & Query & Clause & Rank (bi $\rightarrow$ cross) \\
 \midrule
-Document-specific & In rapidplay, after how many moves can you no longer complain about piece placement? & A.4 & \#7 $\rightarrow$ \#1 \\
-Keyword trap      & In blind chess, how is castling announced? & E.2 & \#6 $\rightarrow$ \#1 \\
-Keyword trap      & What symbol is used to mark a check? & C.13 & \#5 $\rightarrow$ \#1 \\
-Document-specific & For a blind player, when is a piece considered touched? & E.2 (pt.\ 2) & \#4 $\rightarrow$ \#1 \\
-Exception         & What happens if the starting position of the pieces was wrong in rapidplay? & A.4 & \#7 $\rightarrow$ \#2 \\
-Negation          & Can a player not move a piece again once he released it? & 4.6 & \#6 $\rightarrow$ \#2 \\
-Exception         & In Chess960, does the king always move when castling? & F.3 (Notes) & \#5 $\rightarrow$ \#2 \\
-Document-specific & In rapidplay, does the arbiter rule on touch-move on his own? & A.4 & \#5 $\rightarrow$ \#2 \\
-Keyword trap      & What names are used for the files in blind chess? & E.2 & \#8 $\rightarrow$ \#3 \\
-Exception         & Do the special touch rules for blind players also apply to the sighted player? & E.2 (pt.\ 2) & \#7 $\rightarrow$ \#3 \\
+Document-specific & In rapidplay, after how many moves can you no longer complain about piece placement? & A.4 & 7 $\rightarrow$ 1 \\
+Keyword trap      & In blind chess, how is castling announced? & E.2 & 6 $\rightarrow$ 1 \\
+Keyword trap      & What symbol is used to mark a check? & C.13 & 5 $\rightarrow$ 1 \\
+Document-specific & For a blind player, when is a piece considered touched? & E.2 & 4 $\rightarrow$ 1 \\
+Exception         & What happens if the starting position of the pieces was wrong in rapidplay? & A.4 & 7 $\rightarrow$ 2 \\
+Negation          & Can a player not move a piece again once he released it? & 4.6 & 6 $\rightarrow$ 2 \\
+Exception         & In Chess960, does the king always move when castling? & F.3 & 5 $\rightarrow$ 2 \\
+Document-specific & In rapidplay, does the arbiter rule on touch-move on his own? & A.4 & 5 $\rightarrow$ 2 \\
+Keyword trap      & What names are used for the files in blind chess? & E.2 & 8 $\rightarrow$ 3 \\
+Exception         & Do the special touch rules for blind players also apply to the sighted player? & E.2 & 7 $\rightarrow$ 3 \\
 \bottomrule
 \end{tabularx}
 \end{center}
 
-\noindent\textbf{Why the baseline fails here.} Nearly all failures follow one document-specific pattern. The Laws state a rule in the main Articles and then restate a \emph{variant} of it in an appendix (Rapidplay, Blind players, Chess960). For ``In blind chess, how is castling announced?'', the bi-encoder is drawn to the word \emph{castling} and fills its Top~3 with the standard castling rule (3.8) and the Chess960 castling chunks. The cross-encoder reads the whole question against each chunk, sees that it asks about \emph{announcing} a move in \emph{blind} chess, and promotes Appendix E (``Lange/Kurze Rochade'') to \#1. The negation case is similar: for ``Can a player \emph{not} move a piece again once he released it?'', the bi-encoder ranks 4.5 (touched pieces) and 7.3 (displaced pieces) higher because they share the words \emph{piece} and \emph{move}. The baseline Top~3 did contain the \emph{second half} of 4.6, but not the sentence with the restriction. The cross-encoder promotes the first half of 4.6, which states it (``it cannot be moved to another square on this move'').
+Most of these failures come from the way this document is written. A rule is given in the main Articles and then a different version of it appears again in an appendix (Rapidplay, blind players, Chess960). For example, for ``In blind chess, how is castling announced?'', the bi-encoder mostly matched the word ``castling'', and its top 3 had the normal castling rule (3.8) and the Chess960 castling chunks. The cross-encoder looked at the full question and moved the blind-chess appendix chunk (which says ``Lange Rochade'' / ``Kurze Rochade'') up to rank 1. For the negation question about a released piece, the bi-encoder ranked 4.5 (touched pieces) and 7.3 (displaced pieces) higher because they share the words ``piece'' and ``move''. Its top 3 did have the second half of clause 4.6, but not the part that actually says the piece cannot be moved again. The cross-encoder brought that part up to rank 2.
 
-\subsection{Answer 1 (baseline) vs.\ Answer 2 (re-ranked)}
+For the selected queries, I also compared the two LLM answers:
 
 \begin{center}
 \small
-\begin{tabularx}{\textwidth}{@{}p{3.6cm} Y Y@{}}
+\begin{tabularx}{\textwidth}{@{}p{3.4cm} p{3cm} Y@{}}
 \toprule
-\textbf{Query} & \textbf{Answer 1 (baseline Top 3)} & \textbf{Answer 2 (re-ranked Top 3)} \\
+Query & Answer 1 (baseline) & Answer 2 (re-ranked) \\
 \midrule
-Rapidplay: complain about piece placement & Not found in the context. & After three moves, no claim can be made regarding incorrect piece placement, board orientation or clock setting. \textcolor{green!50!black}{\textbf{(correct)}} \\
+Rapidplay, piece placement & Not found & After three moves no claim can be made about piece placement, board orientation or clock setting (correct) \\
 \addlinespace
-Blind chess: castling announced & Not found in the context. & Announced as ``Lange Rochade'' (long) and ``Kurze Rochade'' (short). \textcolor{green!50!black}{\textbf{(correct)}} \\
+Blind chess, castling & Not found & ``Lange Rochade'' and ``Kurze Rochade'' (correct) \\
 \addlinespace
-Blind player: piece touched & Not found in the context. & When it has been taken out of the securing aperture. \textcolor{green!50!black}{\textbf{(correct)}} \\
+Blind player, touched piece & Not found & When it is taken out of the securing aperture (correct) \\
 \addlinespace
-Released piece (negation) & Not found in the context. & Yes, once released on a square it cannot be moved to another square on this move. \textcolor{green!50!black}{\textbf{(correct)}} \\
+Released piece & Not found & It cannot be moved to another square on this move (correct) \\
 \addlinespace
-Chess960: king always moves? & Not found in the context. & Not found in the context. \textcolor{orange!80!black}{\textbf{(chunk at \#2, LLM missed it)}} \\
+Chess960 castling & Not found & Not found (chunk was at rank 2) \\
 \addlinespace
-Rapidplay: arbiter and touch-move & Not found in the context. & Not found in the context. \textcolor{orange!80!black}{\textbf{(chunk at \#2, LLM missed it)}} \\
+Rapidplay, touch-move & Not found & Not found (chunk was at rank 2) \\
 \bottomrule
 \end{tabularx}
 \end{center}
 
-\noindent\textbf{Observations.}
-\begin{itemize}
-  \item \textbf{Omission rather than hallucination.} Because of the strict prompt, the baseline usually did not invent rules. It \emph{omitted} the answer (``Not found''), even though the correct clause was sitting at rank 4--7. Re-ranking turned these omissions into correct, clause-grounded answers.
-  \item \textbf{Misstated rule when the context is wrong.} For ``How is a win on time claimed in rapidplay?'', the correct chunk was not in the Top~10 at all. Answer 2 then confidently described the Appendix D \emph{draw} claim as the way to claim a \emph{win}, which is a misstated rule.
-  \item \textbf{Better ranking $\neq$ better answer.} In two cases the correct chunk reached \#2, but llama3 (8B) still replied ``Not found''. Retrieval quality is necessary but not sufficient; the generator's reading ability also matters.
-  \item \textbf{Re-ranking can also hurt.} In 3 of the 30 queries the cross-encoder pushed the correct chunk \emph{out} of the Top~3 (e.g.\ ``Can I go to the bathroom during my game?'': \#1 $\rightarrow$ \#4). The MS MARCO model was trained on web search, not on legal-style rule text.
-  \item \textbf{The bi-encoder is strong on this document.} Most queries that reuse the rulebook's own wording were already answered correctly by the baseline. Re-ranking mainly helps on paraphrased questions and rule variants.
-\end{itemize}
+Because of the strict prompt, the baseline did not really make up rules. It just left the answer out and said ``Not found'', even though the right clause was sitting at rank 4 to 7. In four of the cases, re-ranking turned this into a correct answer. In the other two, the right chunk did get into the top 3 but llama3 still said ``Not found'', so better retrieval did not always give a better answer. I think this is partly because llama3 8B is a small model.
 
-\section{Latency Profiling}
+I also saw a case where the answer was actually wrong. For ``How is a win on time claimed in rapidplay?'', the correct chunk was not in the bi-encoder's top 10 at all, so the cross-encoder could not help. Answer 2 then described the Appendix D draw claim as if it were the way to claim a win, which is a misstated rule.
 
-Times were measured with \texttt{time.perf\_counter()} on a laptop CPU (Apple Silicon) and averaged over the 7 selected queries.
+Re-ranking did not always help. In 3 of the 30 queries it pushed the correct chunk out of the top 3. For example, for ``Can I go to the bathroom during my game?'' the right chunk went from rank 1 to rank 4. The cross-encoder was trained on MS MARCO web search data, not on rule books, which may explain this. Overall, the bi-encoder was already good on this document whenever the question used the same words as the rulebook. Re-ranking helped mostly when the question was about a variant of a rule or was phrased differently.
+
+\section{Latency}
+
+I timed each stage with \texttt{time.perf\_counter()} on my laptop (Apple Silicon CPU). The numbers below are averages over the 7 selected queries.
 
 \begin{center}
 \begin{tabular}{@{}lrr@{}}
 \toprule
-\textbf{Stage} & \textbf{Baseline (ms)} & \textbf{Re-ranking (ms)} \\
+Stage & Baseline (ms) & Re-ranking (ms) \\
 \midrule
-Bi-encoder retrieval (Top 10)        & 43    & 43    \\
-Cross-encoder re-ranking (10 pairs)  & --    & 84    \\
-LLM generation (llama3, 8B)          & 2{,}253 & 3{,}683 \\
+Bi-encoder retrieval (top 10)       & 43    & 43    \\
+Cross-encoder re-ranking (10 pairs) & --    & 84    \\
+LLM answer (llama3)                 & 2253  & 3683  \\
 \midrule
-\textbf{Total}                       & \textbf{2{,}296} & \textbf{3{,}810} \\
+Total                               & 2296  & 3810  \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-\begin{itemize}
-  \item Re-ranking adds about \textbf{84\,ms per query} (about 8\,ms per pair). This roughly triples the retrieval stage (43\,ms $\rightarrow$ 127\,ms), but it is only about 2\% of the end-to-end time.
-  \item The LLM accounts for more than 95\% of the total. The re-ranking pipeline's LLM time is higher mainly because it produced real (longer) answers, whereas the baseline often replied with the short ``Not found'' sentence. It is not a cost of re-ranking itself.
-  \item Single runs vary considerably on a CPU (retrieval ranged from 10 to 92\,ms), so averages are reported.
-\end{itemize}
+Re-ranking adds about 84 ms per query, which is around 8 ms per pair. The retrieval step goes from 43 ms to 127 ms, so it roughly triples, but compared with the whole pipeline it is only about 2\%. Almost all of the time (more than 95\%) is spent in the LLM. The LLM time is higher for the re-ranking pipeline, but I do not think that is caused by re-ranking. The baseline often just replied ``Not found in the context'', which is short, while the re-ranked pipeline gave longer real answers. The timings also changed quite a bit between queries (retrieval was anywhere from 10 to 92 ms), which is why I used averages.
 
-\section{Scaling Question}
+\section{Why Not Use the Cross-Encoder on Everything?}
 
-\textbf{Why not run the Cross-Encoder over the whole collection from the start?}
+The main reason is that a cross-encoder cannot pre-compute anything. With a bi-encoder, all the chunks are embedded once, offline, and at query time we only encode the query and search the index. Approximate indexes like HNSW make this search very fast even for millions of vectors. A cross-encoder needs the query as part of its input, so it has to process every chunk again for every new query.
 
-\begin{itemize}
-  \item \textbf{Nothing can be pre-computed.} A bi-encoder embeds all documents once, offline. At query time it encodes only the query and runs a nearest-neighbour search, which is sub-linear with approximate indexes such as HNSW or IVF. A cross-encoder needs the query \emph{inside} its input, so every document must be re-processed for every new query.
-  \item \textbf{Cost grows linearly with the collection.} With our measured $\approx$8\,ms per pair, scoring all 132 chunks would take about 1.1\,s per query, already more than 25 times the 43\,ms bi-encoder retrieval. For 1 million passages it would be $10^6 \times 8\,\text{ms} \approx 2.2$ hours \emph{per query}, compared with milliseconds for a vector search.
-  \item \textbf{Retrieve-then-re-rank gets the best of both.} The cheap bi-encoder narrows millions of documents to a small candidate set (here 10) with high recall. The expensive cross-encoder is then spent only where precision matters, on ordering those few candidates.
-  \item \textbf{Trade-off.} The cross-encoder can only re-order what the bi-encoder returns. When the correct chunk is not in the Top~$k$ (our ``win on time in rapidplay'' case), re-ranking cannot recover it. In practice $k$ is chosen to balance recall against re-ranking cost.
-\end{itemize}
+This means the cost grows linearly with the number of chunks. From my timing, one pair takes about 8 ms. Scoring all 132 chunks of this document would already take about 1.1 seconds per query, more than 25 times the 43 ms that the bi-encoder takes. For a collection of 1 million passages it would be about $10^6 \times 8$ ms $\approx$ 2.2 hours for one query, which is not usable.
+
+That is why the two are combined. The bi-encoder quickly narrows everything down to a small set of candidates (10 in my case), and the cross-encoder is only used to order those few more carefully. The downside is that the cross-encoder can only re-order what the bi-encoder gives it. If the right chunk is not in the top $k$, as in my ``win on time in rapidplay'' example, re-ranking cannot fix it. So $k$ has to be chosen as a balance between recall and re-ranking time.
 
 \section{Conclusion}
 
-On the FIDE Laws of Chess, cross-encoder re-ranking fixed 10 of 30 test queries where the bi-encoder had buried the correct clause at ranks 4--8. It turned ``Not found'' answers into correct, grounded ones, at a cost of about 84\,ms per query. The gains came mostly from rule variants in the appendices (Rapidplay, Blind chess, Chess960), where joint attention over the query and the chunk picks up qualifiers that a single pooled vector loses. Re-ranking is not free of errors: it occasionally demoted correct chunks, and it cannot help when the bi-encoder's Top~10 misses the answer entirely.
+On the Laws of Chess, re-ranking fixed 10 of my 30 test queries where the bi-encoder had left the correct clause at rank 4 to 8, and in several cases it turned a ``Not found'' answer into a correct one. It cost about 84 ms extra per query. Most of the improvement came from questions about rule variants in the appendices, where the cross-encoder picked up words like ``rapidplay'' or ``blind'' that the bi-encoder mostly ignored. It was not perfect, though. It made a few rankings worse, and it cannot recover a chunk that the bi-encoder did not retrieve in the first place.
 
 \end{document}
