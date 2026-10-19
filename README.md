@@ -12,7 +12,8 @@ The LLM is `llama3` running locally through Ollama.
 | File | Description |
 |---|---|
 | `rag_reranking.ipynb` | All code: chunking, indexing, both pipelines, failure-mode analysis, latency profiling |
-| `report.tex` | Report (compile on Overleaf) |
+| `Report.pdf` | Final report |
+| `report.tex` | LaTeX source of the report |
 | `LawsOfChess.pdf` | Source document |
 
 ## How to run

@@ -109,7 +109,7 @@ Rapidplay: arbiter and touch-move & Not found in the context. & Not found in the
 \noindent\textbf{Observations.}
 \begin{itemize}
   \item \textbf{Omission rather than hallucination.} Because of the strict prompt, the baseline usually did not invent rules. It \emph{omitted} the answer (``Not found''), even though the correct clause was sitting at rank 4--7. Re-ranking turned these omissions into correct, clause-grounded answers.
-  \item \textbf{Misstated rule when the context is wrong.} For ``When is castling not allowed?'', Answer 1 listed the temporary restrictions and then ended with ``So, the answer is: Not found in the context.'', contradicting itself because two of its three chunks were weak. For ``How is a win on time claimed in rapidplay?'', the correct chunk was not in the Top~10 at all. Answer 2 then confidently described the Appendix D \emph{draw} claim as the way to claim a \emph{win}, which is a misstated rule.
+  \item \textbf{Misstated rule when the context is wrong.} For ``How is a win on time claimed in rapidplay?'', the correct chunk was not in the Top~10 at all. Answer 2 then confidently described the Appendix D \emph{draw} claim as the way to claim a \emph{win}, which is a misstated rule.
   \item \textbf{Better ranking $\neq$ better answer.} In two cases the correct chunk reached \#2, but llama3 (8B) still replied ``Not found''. Retrieval quality is necessary but not sufficient; the generator's reading ability also matters.
   \item \textbf{Re-ranking can also hurt.} In 3 of the 30 queries the cross-encoder pushed the correct chunk \emph{out} of the Top~3 (e.g.\ ``Can I go to the bathroom during my game?'': \#1 $\rightarrow$ \#4). The MS MARCO model was trained on web search, not on legal-style rule text.
   \item \textbf{The bi-encoder is strong on this document.} Most queries that reuse the rulebook's own wording were already answered correctly by the baseline. Re-ranking mainly helps on paraphrased questions and rule variants.
@@ -152,6 +152,6 @@ LLM generation (llama3, 8B)          & 2{,}253 & 3{,}683 \\
 
 \section{Conclusion}
 
-On the FIDE Laws of Chess, cross-encoder re-ranking fixed 10 of 30 test queries where the bi-encoder had buried the correct clause at ranks 4--8. It turned ``Not found'' answers into correct, grounded ones, at a cost of about 85\,ms per query. The gains came mostly from rule variants in the appendices (Rapidplay, Blind chess, Chess960), where joint attention over the query and the chunk picks up qualifiers that a single pooled vector loses. Re-ranking is not free of errors: it occasionally demoted correct chunks, and it cannot help when the bi-encoder's Top~10 misses the answer entirely.
+On the FIDE Laws of Chess, cross-encoder re-ranking fixed 10 of 30 test queries where the bi-encoder had buried the correct clause at ranks 4--8. It turned ``Not found'' answers into correct, grounded ones, at a cost of about 84\,ms per query. The gains came mostly from rule variants in the appendices (Rapidplay, Blind chess, Chess960), where joint attention over the query and the chunk picks up qualifiers that a single pooled vector loses. Re-ranking is not free of errors: it occasionally demoted correct chunks, and it cannot help when the bi-encoder's Top~10 misses the answer entirely.
 
 \end{document}
