@@ -124,19 +124,19 @@ Times were measured with \texttt{time.perf\_counter()} on a laptop CPU (Apple Si
 \toprule
 \textbf{Stage} & \textbf{Baseline (ms)} & \textbf{Re-ranking (ms)} \\
 \midrule
-Bi-encoder retrieval (Top 10)        & 111   & 111   \\
-Cross-encoder re-ranking (10 pairs)  & --    & 149   \\
-LLM generation (llama3, 8B)          & 2{,}861 & 3{,}615 \\
+Bi-encoder retrieval (Top 10)        & 43    & 43    \\
+Cross-encoder re-ranking (10 pairs)  & --    & 84    \\
+LLM generation (llama3, 8B)          & 2{,}253 & 3{,}683 \\
 \midrule
-\textbf{Total}                       & \textbf{2{,}973} & \textbf{3{,}876} \\
+\textbf{Total}                       & \textbf{2{,}296} & \textbf{3{,}810} \\
 \bottomrule
 \end{tabular}
 \end{center}
 
 \begin{itemize}
-  \item Re-ranking adds about \textbf{150\,ms per query} (about 15\,ms per pair). This roughly doubles the retrieval stage, but it is only about 5\% of the end-to-end time.
-  \item The LLM accounts for more than 90\% of the total. The re-ranking pipeline's LLM time is higher mainly because it produced real (longer) answers, whereas the baseline often replied with the short ``Not found'' sentence. It is not a cost of re-ranking itself.
-  \item Single runs vary considerably on a CPU (retrieval ranged from 6 to 264\,ms), so averages are reported.
+  \item Re-ranking adds about \textbf{84\,ms per query} (about 8\,ms per pair). This roughly triples the retrieval stage (43\,ms $\rightarrow$ 127\,ms), but it is only about 2\% of the end-to-end time.
+  \item The LLM accounts for more than 95\% of the total. The re-ranking pipeline's LLM time is higher mainly because it produced real (longer) answers, whereas the baseline often replied with the short ``Not found'' sentence. It is not a cost of re-ranking itself.
+  \item Single runs vary considerably on a CPU (retrieval ranged from 10 to 92\,ms), so averages are reported.
 \end{itemize}
 
 \section{Scaling Question}
@@ -145,13 +145,13 @@ LLM generation (llama3, 8B)          & 2{,}861 & 3{,}615 \\
 
 \begin{itemize}
   \item \textbf{Nothing can be pre-computed.} A bi-encoder embeds all documents once, offline. At query time it encodes only the query and runs a nearest-neighbour search, which is sub-linear with approximate indexes such as HNSW or IVF. A cross-encoder needs the query \emph{inside} its input, so every document must be re-processed for every new query.
-  \item \textbf{Cost grows linearly with the collection.} With our measured $\approx$15\,ms per pair, scoring all 132 chunks would take about 2\,s per query, already slower than the LLM's share of the work. For 1 million passages it would be $10^6 \times 15\,\text{ms} \approx 4$ hours \emph{per query}, compared with milliseconds for a vector search.
+  \item \textbf{Cost grows linearly with the collection.} With our measured $\approx$8\,ms per pair, scoring all 132 chunks would take about 1.1\,s per query, already more than 25 times the 43\,ms bi-encoder retrieval. For 1 million passages it would be $10^6 \times 8\,\text{ms} \approx 2.2$ hours \emph{per query}, compared with milliseconds for a vector search.
   \item \textbf{Retrieve-then-re-rank gets the best of both.} The cheap bi-encoder narrows millions of documents to a small candidate set (here 10) with high recall. The expensive cross-encoder is then spent only where precision matters, on ordering those few candidates.
   \item \textbf{Trade-off.} The cross-encoder can only re-order what the bi-encoder returns. When the correct chunk is not in the Top~$k$ (our ``win on time in rapidplay'' case), re-ranking cannot recover it. In practice $k$ is chosen to balance recall against re-ranking cost.
 \end{itemize}
 
 \section{Conclusion}
 
-On the FIDE Laws of Chess, cross-encoder re-ranking fixed 10 of 30 test queries where the bi-encoder had buried the correct clause at ranks 4--8. It turned ``Not found'' answers into correct, grounded ones, at a cost of about 150\,ms per query. The gains came mostly from rule variants in the appendices (Rapidplay, Blind chess, Chess960), where joint attention over the query and the chunk picks up qualifiers that a single pooled vector loses. Re-ranking is not free of errors: it occasionally demoted correct chunks, and it cannot help when the bi-encoder's Top~10 misses the answer entirely.
+On the FIDE Laws of Chess, cross-encoder re-ranking fixed 10 of 30 test queries where the bi-encoder had buried the correct clause at ranks 4--8. It turned ``Not found'' answers into correct, grounded ones, at a cost of about 85\,ms per query. The gains came mostly from rule variants in the appendices (Rapidplay, Blind chess, Chess960), where joint attention over the query and the chunk picks up qualifiers that a single pooled vector loses. Re-ranking is not free of errors: it occasionally demoted correct chunks, and it cannot help when the bi-encoder's Top~10 misses the answer entirely.
 
 \end{document}
